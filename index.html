@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>ThraeAI · My Health</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src https://hgqzgrrydsgythsgtdiz.supabase.co; img-src 'self' data:">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -117,7 +118,7 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',-apple-system,
 .supp-status.taken{color:var(--accent)}
 .supp-status.not-taken{color:var(--text-muted)}
 .supp-btn{padding:8px 20px;border-radius:10px;border:none;font-size:13px;font-weight:700;cursor:pointer;
-  transition:all .2s;min-width:80px;text-align:center}
+  transition:all .2s;min-width:80px;text-align:center;white-space:nowrap;flex-shrink:0}
 .supp-btn.take{background:var(--elevated);color:var(--text-sec)}
 [data-theme="dark"] .supp-btn.take{background:var(--border)}
 .supp-btn.taken{background:var(--accent);color:var(--on-accent)}
@@ -167,7 +168,8 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',-apple-system,
 </div>
 <script>
 const API='https://hgqzgrrydsgythsgtdiz.supabase.co/functions/v1/web-dashboard';
-let T='',selDate='',today='',tab='nutrition';
+function escHTML(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+let T='',selDate='',today='',tab='nutrition',lastData=null;
 const suppSt={};
 
 (function(){
@@ -175,6 +177,7 @@ const suppSt={};
   T=p.get('token')||localStorage.getItem('thrae_token')||'';
   if(!T){err('No access token','Ask your health agent for a dashboard link.');return}
   localStorage.setItem('thrae_token',T);
+  if(location.search.includes('token'))history.replaceState(null,'',location.pathname);
   const t=localStorage.getItem('thrae_theme');
   if(t==='dark')document.documentElement.setAttribute('data-theme','dark');
   load();
@@ -188,14 +191,15 @@ async function load(date){
     if(!d.ok){err(d.error==='Token expired'?'Session expired':'Error',d.error||'Failed');return}
     if(!selDate){today=d.availableDates?d.availableDates[0]:d.requestedDate}
     selDate=d.requestedDate;
-    render(d);
+    lastData=d;render(d);
   }catch(e){err('Connection error','Could not reach the server.')}
 }
 
-function err(t,m){
+function err(t,m){t=escHTML(t);m=escHTML(m);
   document.getElementById('app').innerHTML=`<div style="padding:60px 20px;text-align:center">
     <div style="font-size:48px;margin-bottom:16px">😕</div><h2 style="margin-bottom:8px">${t}</h2>
-    <p style="color:var(--text-sec);font-size:14px">${m}</p></div>`;
+    <p style="color:var(--text-sec);font-size:14px">${m}</p>
+    <button onclick="load(selDate)" style="margin-top:16px;padding:10px 24px;border-radius:10px;border:none;background:var(--accent);color:var(--on-accent);font-size:14px;font-weight:600;cursor:pointer">Try Again</button></div>`;
 }
 
 function isDark(){return document.documentElement.getAttribute('data-theme')==='dark'}
@@ -208,8 +212,8 @@ function render(d){
         <div class="app-icon"><span class="app-icon-t">T</span></div>
         <span class="app-name">Thrae<b>AI</b></span>
       </div>
-      <div class="greeting-text">Hey ${d.displayName||'there'} 👋</div>
-      <div class="date-text">${d.displayDate||''}</div>
+      <div class="greeting-text">Hey ${escHTML(d.displayName)||'there'} 👋</div>
+      <div class="date-text">${escHTML(d.displayDate)||''}</div>
       <button class="theme-btn" onclick="togTheme()" aria-label="Toggle theme">${isDark()?'☀️':'🌙'}</button>
     </div>
     <div class="date-strip" id="ds"></div>
@@ -239,7 +243,7 @@ function renderDS(dates,sel){
   });
 }
 
-function sw(t){tab=t;load(selDate)}
+function sw(t){tab=t;if(lastData){render(lastData)}else{load(selDate)}}
 
 /* Nutrition */
 function renderNut(d){
@@ -276,9 +280,9 @@ function macro(label,d,color){
 }
 
 function mealHTML(m){
-  return`<div class="meal-item"><span class="meal-emoji">${m.emoji||mealEmoji(m.type)}</span>
-    <div class="meal-info"><div class="meal-type">${m.type||'Meal'}</div><div class="meal-text">${m.itemNames||m.text||''}</div></div>
-    <div class="meal-right"><div class="meal-cal">${m.calories||0} cal</div><div class="meal-time">${m.time||''}</div></div></div>`;
+  return`<div class="meal-item"><span class="meal-emoji">${escHTML(m.emoji)||mealEmoji(m.type)}</span>
+    <div class="meal-info"><div class="meal-type">${escHTML(m.type)||'Meal'}</div><div class="meal-text">${escHTML(m.itemNames||m.text||'')}</div></div>
+    <div class="meal-right"><div class="meal-cal">${escHTML(m.calories)||0} cal</div><div class="meal-time">${escHTML(m.time)||''}</div></div></div>`;
 }
 
 function mealEmoji(t){return{breakfast:'🍳',lunch:'🍛',dinner:'🍽️',snack:'🍫'}[t]||'🍽️'}
@@ -287,7 +291,7 @@ function mealEmoji(t){return{breakfast:'🍳',lunch:'🍛',dinner:'🍽️',snac
 function renderSupp(d){
   const el=document.getElementById('tc'),s=d.supplements||{},cat=s.catalog||[],sum=s.summary||{taken:0,total:0};
   if(!cat.length){el.innerHTML=`<div class="card"><div class="empty"><div class="e">💊</div><h3>No supplements tracked</h3><p>Ask your health agent to set up your list.</p></div></div>`;return}
-  cat.forEach(x=>{if(!(x.id in suppSt))suppSt[x.id]=x.taken});
+  Object.keys(suppSt).forEach(k=>delete suppSt[k]);cat.forEach(x=>{suppSt[x.id]=x.taken});
   const pct=sum.total?Math.round(sum.taken/sum.total*100):0,C=2*Math.PI*32,off=C-(pct/100)*C;
   const supps=cat.filter(x=>x.type!=='medication'),meds=cat.filter(x=>x.type==='medication');
   el.innerHTML=`<div class="card">
@@ -310,7 +314,7 @@ function suppHTML(s){
   const timeStr=tk&&s.logged_at?`Taken at ${fmtTime(s.logged_at)}`:'Not yet';
   const remind=!tk&&s.reminder_time?` · ⏰ ${s.reminder_time}`:'';
   const dosage=s.dosage?` · ${s.dosage}`:'';
-  return`<div class="supp-item"><div><div class="supp-name">${s.name}${dosage?`<span style="color:var(--text-sec);font-weight:400;font-size:12px">${dosage}</span>`:''}</div>
+  return`<div class="supp-item" data-sid="${esc(s.id)}"><div><div class="supp-name">${escHTML(s.name)}${dosage?`<span style="color:var(--text-sec);font-weight:400;font-size:12px">${escHTML(dosage)}</span>`:''}</div>
     <div class="supp-status ${cls}">${timeStr}${remind}</div></div>
     <button class="supp-btn ${tk?'taken':'take'}" onclick="togSupp('${esc(s.id)}','${esc(s.name)}')">${tk?'Taken ✓':'Take'}</button></div>`;
 }
@@ -330,21 +334,18 @@ function updRing(){
 function esc(s){return(s||'').replace(/'/g,"\\'")}
 
 async function togSupp(id,name){
-  let cur=false;
-  document.querySelectorAll('.supp-item').forEach(el=>{
-    if(el.querySelector('.supp-name')?.textContent.startsWith(name))
-      cur=el.querySelector('.supp-btn')?.classList.contains('taken')||false;
-  });
+  const el=document.querySelector(`.supp-item[data-sid="${id}"]`);
+  if(!el)return;
+  let cur=el.querySelector('.supp-btn')?.classList.contains('taken')||false;
   if(suppSt[id+'_b'])return;suppSt[id+'_b']=true;
   const act=cur?'unlog_supplement':'log_supplement';
-  document.querySelectorAll('.supp-item').forEach(el=>{
-    if(!el.querySelector('.supp-name')?.textContent.startsWith(name))return;
+  {
     const b=el.querySelector('.supp-btn'),st=el.querySelector('.supp-status');
     b.style.pointerEvents='none';b.style.opacity='.6';
     if(!cur){b.className='supp-btn taken';b.textContent='Taken ✓';st.className='supp-status taken';st.textContent='Just now'}
     else{b.className='supp-btn take';b.textContent='Take';st.className='supp-status not-taken';st.textContent='Not yet'}
     setTimeout(()=>{b.style.pointerEvents='';b.style.opacity=''},800);
-  });
+  }
   suppSt[id]=!cur;
   updRing();
   try{
