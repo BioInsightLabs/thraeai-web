@@ -1,0 +1,98 @@
+name: Test & Deploy Dashboard
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'index.html'
+
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger test pipeline
+        run: |
+          curl -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.TEST_PIPELINE_TOKEN }}" \
+            https://api.github.com/repos/BioInsightLabs/thraeai-tests/dispatches \
+            -d '{"event_type":"run-tests","client_payload":{"suite":"dashboard","source":"thraeai-web"}}'
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          echo "Host vps" >> ~/.ssh/config
+          echo "  HostName ${{ secrets.VPS_HOST }}" >> ~/.ssh/config
+          echo "  User ${{ secrets.VPS_USER }}" >> ~/.ssh/config
+          echo "  IdentityFile ~/.ssh/deploy_key" >> ~/.ssh/config
+          echo "  StrictHostKeyChecking no" >> ~/.ssh/config
+
+      - name: Pre-flight security checks
+        run: |
+          grep -q 'function escHTML' index.html || { echo "❌ escHTML() missing — XSS protection required"; exit 1; }
+          grep -q 'Content-Security-Policy' index.html || { echo "❌ CSP meta tag missing"; exit 1; }
+          echo "✅ Security pre-flight passed"
+
+      - name: Backup current dashboard
+        run: |
+          ssh vps "cp /var/www/html/index.html /tmp/dashboard-backup-$(date +%Y%m%d%H%M).html" 2>/dev/null || true
+          echo "✅ Backup saved"
+
+      - name: Deploy to VPS
+        run: |
+          scp index.html vps:/var/www/html/index.html
+          echo "✅ Dashboard deployed"
+
+      - name: Health check
+        id: healthcheck
+        run: |
+          sleep 2
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' https://me.thrae.ai)
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ https://me.thrae.ai → $HTTP_CODE"
+          else
+            echo "❌ https://me.thrae.ai → $HTTP_CODE"
+            exit 1
+          fi
+
+      - name: Rollback on failure
+        if: failure() && steps.healthcheck.outcome == 'failure'
+        run: |
+          echo "🔄 Rolling back dashboard..."
+          BACKUP=$(ssh vps "ls -t /tmp/dashboard-backup-*.html 2>/dev/null | head -1")
+          if [ -n "$BACKUP" ]; then
+            ssh vps "cp $BACKUP /var/www/html/index.html"
+            echo "⚠️ Rolled back to previous version"
+          else
+            echo "❌ No backup found — manual intervention required"
+          fi
+
+      - name: Notify Telegram
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.CI_TELEGRAM_BOT_TOKEN || '' }}
+          TELEGRAM_CHAT_ID: ${{ secrets.CI_TELEGRAM_CHAT_ID || '' }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then exit 0; fi
+          STATUS="${{ job.status }}"
+          if [ "$STATUS" = "success" ]; then
+            MSG="✅ *Dashboard Deploy Successful*%0A%0ACommit: \`${{ github.sha }}\`"
+          else
+            MSG="🔴 *Dashboard Deploy Failed*%0A%0A[View Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          fi
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" -d text="${MSG}" -d parse_mode="Markdown" -d disable_web_page_preview=true
